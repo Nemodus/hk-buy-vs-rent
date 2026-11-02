@@ -1,0 +1,5 @@
+# Keep line endings stable so the scheduled workflow and a Windows checkout
+# do not produce spurious diffs against each other.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

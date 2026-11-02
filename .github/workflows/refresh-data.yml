@@ -1,0 +1,59 @@
+name: Refresh market data
+
+# RVD restates the previous month around the 28th, so this runs a few days
+# later. The manual trigger is there for when you want it sooner.
+on:
+  schedule:
+    - cron: "0 2 3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Fetch the RVD statistics
+        run: node scripts/fetch-rvd.mjs
+
+      - name: Embed them in the page
+        run: node scripts/build.mjs
+
+      - name: Commit only if the figures moved
+        run: |
+          if git diff --quiet -- data/market.json index.html; then
+            echo "No change in the published figures."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/market.json index.html
+          git commit -m "data: RVD refresh $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Market data"
+            echo ""
+            node -e '
+              const d=require("./data/market.json");
+              console.log("Generated **"+d.generated+"**");
+              console.log("");
+              console.log("| series | span | source last modified |");
+              console.log("| --- | --- | --- |");
+              for (const f of d.files) console.log(`| ${f.key} | ${f.span} | ${f.modified} |`);
+            '
+          } >> "$GITHUB_STEP_SUMMARY"
