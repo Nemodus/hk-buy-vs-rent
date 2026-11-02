@@ -131,8 +131,13 @@ const main = async () => {
           ? `  ${parsed.v.length - parsed.provFrom} provisional` : ""));
   }
 
+  /* The vintage is the newest Last-Modified across the sources, not the time
+     this ran. A run that finds nothing new then writes a byte-identical file,
+     so the workflow commits only when RVD has actually published something and
+     the git log stays a record of real revisions rather than of cron firing. */
+  const stamps = meta.map(m => (m.modified ? Date.parse(m.modified) : NaN)).filter(Number.isFinite);
   const out = {
-    generated: new Date().toISOString().slice(0, 19) + "Z",
+    vintage: stamps.length ? new Date(Math.max(...stamps)).toISOString().slice(0, 19) + "Z" : "",
     source: {
       name: "Rating and Valuation Department, Hong Kong SAR Government",
       via: "https://data.gov.hk/en-data/dataset/hk-rvd-tsinfo_rvd-property-market-statistics",
@@ -149,7 +154,7 @@ const main = async () => {
   await mkdir(dirname(OUT), { recursive: true });
   await writeFile(OUT, JSON.stringify(out));
   const kb = (JSON.stringify(out).length / 1024).toFixed(1);
-  console.log(`\nwrote data/market.json  ${kb} kB`);
+  console.log(`\nwrote data/market.json  ${kb} kB  vintage ${out.vintage}`);
 };
 
 main().catch(e => { console.error("FAILED:", e.message); process.exit(1); });

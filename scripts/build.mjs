@@ -39,5 +39,5 @@ html = html.slice(0, i + OPEN.length) + json + html.slice(j);
 await writeFile(PAGE, html);
 
 const d = JSON.parse(json);
-console.log(`embedded ${(json.length / 1024).toFixed(1)} kB generated ${d.generated}`);
+console.log(`embedded ${(json.length / 1024).toFixed(1)} kB  vintage ${d.vintage}`);
 for (const f of d.files) console.log(`  ${f.key.padEnd(7)} ${f.span}`);

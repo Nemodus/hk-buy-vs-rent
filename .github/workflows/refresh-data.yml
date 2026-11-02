@@ -50,7 +50,7 @@ jobs:
             echo ""
             node -e '
               const d=require("./data/market.json");
-              console.log("Generated **"+d.generated+"**");
+              console.log("Vintage **"+d.vintage+"**");
               console.log("");
               console.log("| series | span | source last modified |");
               console.log("| --- | --- | --- |");
