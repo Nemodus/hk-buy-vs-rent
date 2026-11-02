@@ -100,6 +100,12 @@ function extract(text, freq) {
            provFrom: provFrom === null ? values.length : provFrom };
 }
 
+/* The publication day of a Last-Modified header, in UTC. */
+const pubDate = h => {
+  const t = h ? Date.parse(h) : NaN;
+  return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : null;
+};
+
 /* ---------- fetch ---------- */
 async function get(url, tries = 3) {
   let last;
@@ -123,7 +129,7 @@ const main = async () => {
     const { text, modified } = await get(url);
     const parsed = extract(text, s.freq);
     series[s.key] = parsed;
-    meta.push({ key: s.key, label: s.label, url, modified,
+    meta.push({ key: s.key, label: s.label, url, modified: pubDate(modified),
                 span: `${parsed.start} to ${parsed.end}`, rows: parsed.v.length });
     console.log(`  ${s.key.padEnd(7)} ${String(parsed.v.length).padStart(4)} rows  `
       + `${parsed.start} to ${parsed.end}  cols ${parsed.cols.join(",")}`
@@ -131,13 +137,15 @@ const main = async () => {
           ? `  ${parsed.v.length - parsed.provFrom} provisional` : ""));
   }
 
-  /* The vintage is the newest Last-Modified across the sources, not the time
-     this ran. A run that finds nothing new then writes a byte-identical file,
-     so the workflow commits only when RVD has actually published something and
-     the git log stays a record of real revisions rather than of cron firing. */
-  const stamps = meta.map(m => (m.modified ? Date.parse(m.modified) : NaN)).filter(Number.isFinite);
+  /* The vintage is the day the newest source file was published, not the time
+     this ran, so a fetch that finds nothing new writes a byte-identical file
+     and the workflow stays silent. Dates, not timestamps: rvd.gov.hk sits
+     behind something that reports Last-Modified a second either side of the
+     real value between requests, which was enough to produce a commit a month
+     with no change in any figure. These files are published once a day. */
+  const days = meta.map(m => m.modified).filter(Boolean).sort();
   const out = {
-    vintage: stamps.length ? new Date(Math.max(...stamps)).toISOString().slice(0, 19) + "Z" : "",
+    vintage: days.length ? days[days.length - 1] : "",
     source: {
       name: "Rating and Valuation Department, Hong Kong SAR Government",
       via: "https://data.gov.hk/en-data/dataset/hk-rvd-tsinfo_rvd-property-market-statistics",
