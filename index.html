@@ -705,7 +705,7 @@ const SPEC = [
   {k:"leaseYears",      l:"Rent resets every",       t:"num", v:2, u:"yr", step:1, h:"Rent is fixed for the lease, then steps to the market level."},
   {k:"depositMonths",   l:"Security deposit",        t:"num", v:2, u:"mo", step:1, h:"Held by the landlord, earns nothing, topped up at each reset, returned at the end."},
   {k:"rentAgencyMonths",l:"Agency fee per lease",    t:"num", v:.5, u:"mo", step:.25},
-  {k:"bandYield",       l:"Band the rental yield",   t:"check", v:false,
+  {k:"bandYield",       l:"Band the rental yield",   t:"check", v:true,
      h:"Off, rent and the flat compound at their own rates and the gross yield drifts wherever that takes it — over thirty years a one-point gap moves it by a third. On, the market rent is held to the band below, so you can write a scenario where rent catches up on prices without the yield reaching somewhere Hong Kong has never been. It is the market rent that is bound, so this also moves the rateable value and therefore the owner's rates. Your rent is still fixed for the length of each lease, so the yield can sit outside the band until the next reset. The Risk simulation re-strikes it against each drawn path, so the band holds there too."},
   {k:"yieldFloor",      l:"…floor",              t:"pct", v:1.5, step:.25, alt:true,
      h:"Gross, before the owner's costs. The RVD series has not had a class below 2.2% since 1999, so 1.5% is already generous room."},
