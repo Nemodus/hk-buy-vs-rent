@@ -2,3 +2,7 @@ _preview.html
 node_modules/
 .DS_Store
 Thumbs.db
+
+# local preview server, not part of the page
+.claude/serve.mjs
+.claude/launch.json

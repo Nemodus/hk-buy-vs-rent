@@ -1,3 +1,7 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Buy or Rent Hong Kong</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -315,10 +319,24 @@ tr.sumrow td:first-child{background:var(--surface-2)}
   .snav,#kpis,#chips,#sm-kpis,#hist-kpis{flex:none}
   #v-scen section[role=tabpanel],#sum-scroll,#hist-scroll{flex:1 1 auto;min-height:0;overflow:auto;
     overscroll-behavior:contain}
-  body.guide-off .guide-band{display:none}
 }
-@media (max-width:1100px){
-  #btn-guide{display:none}
+body.guide-off .guide-band{display:none}
+
+/* ---------- phone and small tablet: results first, inputs underneath ---------- */
+@media (max-width:1060px){
+  .shell{padding-block:14px 40px;gap:14px}
+  .main{order:1;gap:14px}
+  .panel{order:2}
+  .top-in{flex-wrap:wrap;row-gap:6px}
+  .verdict{margin-left:0;text-align:left;flex-basis:100%;order:3}
+  .stab{padding:8px 11px 7px}
+}
+@media (max-width:620px){
+  .shell{padding-left:max(10px,env(safe-area-inset-left,0px));
+         padding-right:max(10px,env(safe-area-inset-right,0px))}
+  .guide{padding-block:14px 16px}
+  .row{grid-template-columns:minmax(0,1fr) 88px 46px;gap:0 6px;padding-inline:11px}
+  .sec-head,.grp>summary,.panel-head{padding-inline:11px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -1960,6 +1978,70 @@ function histTiles(){
 }
 
 /* ---- price and rent, rebased ---- */
+/* A quarter or month label for a fractional year, 1994.25 -> "1994 Q2". */
+function hPeriod(t,freq){
+  const y=Math.floor(t+1e-9), f=t-y;
+  if(freq==="M") return `${y} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Math.round(f*12)]||""}`.trim();
+  return `${y} Q${Math.round(f*4)+1}`;
+}
+
+/* Crosshair and floating readout, shared by the four historical charts. The
+   caller gives the plot geometry and a pick(t) that turns a time into the rows
+   to show and the dots to park on the lines; everything else is the same in
+   all four, including re-attaching after a redraw, since each draw replaces
+   the host's markup and with it these listeners. */
+function histHover(host,geom,pick){
+  const svg=host.querySelector("svg"); if(!svg) return;
+  const {pad,pw,ph,W}=geom, NS="http://www.w3.org/2000/svg";
+
+  const hit=document.createElementNS(NS,"rect");
+  hit.setAttribute("x",pad.l); hit.setAttribute("y",pad.t);
+  hit.setAttribute("width",pw); hit.setAttribute("height",ph);
+  hit.setAttribute("fill","transparent");
+  svg.appendChild(hit);
+
+  const cross=document.createElementNS(NS,"g");
+  cross.setAttribute("opacity","0");
+  cross.setAttribute("pointer-events","none");
+  svg.appendChild(cross);
+
+  const tt=document.createElement("div");
+  tt.className="tt";
+  host.appendChild(tt);
+
+  const ax=tok("--axis"), sf=tok("--surface");
+  const hide=()=>{ cross.setAttribute("opacity","0"); tt.classList.remove("on"); };
+
+  svg.addEventListener("pointermove",ev=>{
+    const r=svg.getBoundingClientRect();
+    if(!r.width) return;
+    const px=(ev.clientX-r.left)*(W/r.width);
+    if(px<pad.l-2||px>pad.l+pw+2) return hide();
+    const got=pick(geom.t0+(px-pad.l)/pw*(geom.t1-geom.t0));
+    if(!got) return hide();
+
+    const cx=(got.x!=null?got.x:px);
+    let g=`<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${pad.t}" y2="${pad.t+ph}" stroke="${ax}" stroke-width="1"/>`;
+    for(const m of (got.marks||[]))
+      g+=`<circle cx="${m[0].toFixed(1)}" cy="${m[1].toFixed(1)}" r="3.5" fill="${m[2]}" stroke="${sf}" stroke-width="2"/>`;
+    cross.innerHTML=g;
+    cross.setAttribute("opacity","1");
+
+    tt.innerHTML=`<div class="tt-h">${got.head}</div>`
+      +got.rows.map(([c,k,v,tot])=>`<div class="tt-r${tot?" tot":""}">`
+        +`<span class="swatch" style="background:${c||"transparent"}"></span><b>${k}</b>`
+        +`<span class="num">${v}</span></div>`).join("");
+    tt.classList.add("on");
+
+    /* flip to the left of the crosshair when the right edge would clip it */
+    const sx=cx*(r.width/W), tw=tt.offsetWidth||180;
+    tt.style.left=Math.max(0,Math.min(r.width-tw-2, sx+tw+16>r.width ? sx-tw-14 : sx+14))+"px";
+    tt.style.top="10px";
+  });
+  svg.addEventListener("pointerleave",hide);
+  svg.addEventListener("pointercancel",hide);
+}
+
 function histIndex(){
   const host=document.getElementById("ch-hist-idx"); if(!host) return;
   const px=hs("pxQ",HCLASS), rt=hs("rentQ",HCLASS);
@@ -1998,6 +2080,18 @@ function histIndex(){
   o.push(end(P,s1,SEP(Math.round(P[P.length-1][1]))));
   o.push(`</svg>`);
   host.innerHTML=o.join("");
+
+  const near=(arr,t)=>{ let b=0; for(let i=1;i<arr.length;i++) if(Math.abs(arr[i][0]-t)<Math.abs(arr[b][0]-t)) b=i; return b; };
+  histHover(host,{pad,pw,ph,W,t0,t1},t=>{
+    const i=near(P,t), j=near(R,t), ahead=(P[i][1]/R[j][1]-1)*100;
+    return {x:x(P[i][0]),
+      marks:[[x(P[i][0]),yv(P[i][1]),s1],[x(R[j][0]),yv(R[j][1]),s2]],
+      head:hPeriod(P[i][0],px.freq),
+      rows:[[s1,"Price index",P[i][1].toFixed(1)],
+            [s2,"Rental index",R[j][1].toFixed(1)],
+            ["",ahead>=0?"Prices ahead of rents":"Rents ahead of prices",
+             Math.abs(ahead).toFixed(1)+"%",true]]};
+  });
 
   const yrs=t1-t0;
   const pg=cagr(100,P[P.length-1][1],yrs)*100, rg=cagr(100,R[R.length-1][1],yrs)*100;
@@ -2055,6 +2149,15 @@ function histYears(){
   o.push(`<line x1="${pad.l}" y1="${z.toFixed(1)}" x2="${pad.l+pw}" y2="${z.toFixed(1)}" stroke="${ax}"/>`);
   o.push(`</svg>`);
   host.innerHTML=o.join("");
+
+  histHover(host,{pad,pw,ph,W,t0:bars[0].y-.5,t1:bars[bars.length-1].y+.5},t=>{
+    let b=bars[0];
+    for(const q of bars) if(Math.abs(q.y-t)<Math.abs(b.y-t)) b=q;
+    const c=b.r>=0?s1:s2;
+    return {x:x(b.y), marks:[[x(b.y),y(b.r),c]],
+      head:b.y+(b.part?" · year to date":""),
+      rows:[[c,"Price change",(b.r>=0?"+":"−")+Math.abs(b.r).toFixed(1)+"%",true]]};
+  });
 }
 
 /* ---- yields, every class, yours picked out ---- */
@@ -2088,6 +2191,20 @@ function histYield(){
   o.push(`<circle cx="${(pad.l+pw).toFixed(1)}" cy="${y(le).toFixed(1)}" r="3.5" fill="${s1}" stroke="${sf}" stroke-width="2"/>`);
   o.push(`</svg>`);
   host.innerHTML=o.join("");
+
+  histHover(host,{pad,pw,ph,W,t0,t1},t=>{
+    const S=mine.s;
+    let i=0; for(let q=1;q<S.t.length;q++) if(Math.abs(S.t[q]-t)<Math.abs(S.t[i]-t)) i=q;
+    if(S.v[i]==null) return null;
+    const rows=[], marks=[];
+    for(const {k,s:T} of sets){
+      if(T.v[i]==null) continue;
+      const own=k===cls;
+      rows.push([own?s1:i2,"Class "+k,T.v[i].toFixed(2)+"%",own]);
+      if(own) marks.push([x(T.t[i]),y(T.v[i]),s1]);
+    }
+    return {x:x(S.t[i]), marks, head:hPeriod(S.t[i],S.freq), rows};
+  });
   const sorted=lv.slice().sort((a,b)=>a-b);
   document.getElementById("hist-yield-foot").innerHTML=
     `<p style="margin:0;font-size:12.5px;color:var(--ink-2)">Class ${cls} yields
@@ -2138,6 +2255,16 @@ function histRolling(){
   o.push(`</svg>`);
   host.innerHTML=o.join("");
 
+  histHover(host,{pad,pw,ph,W,t0,t1},t=>{
+    let b=cur[0];
+    for(const q of cur) if(Math.abs(q.t-t)<Math.abs(b.t-t)) b=q;
+    const c=b.r>=0?s1:s2;
+    return {x:x(b.t), marks:[[x(b.t),y(b.r),c]],
+      head:`${HHOR}-year window ending ${hPeriod(b.t,px.freq)}`,
+      rows:[[c,"Annualised",(b.r>=0?"+":"−")+Math.abs(b.r).toFixed(2)+"%",true],
+            ["","Bought in",hPeriod(b.t-HHOR,px.freq)]]};
+  });
+
   const stat=h=>{ const r=roll(h).map(p=>p.r).sort((a,b)=>a-b);
     return r.length?{n:r.length,lo:r[0],med:r[Math.floor(r.length/2)],hi:r[r.length-1]}:null; };
   let tb=`<table><thead><tr><th>Hold</th><th class="th-g">Windows</th><th>Worst</th><th>Median</th><th>Best</th>`
@@ -2172,6 +2299,24 @@ function histRolling(){
 /* ===========================================================================
    9. Summary strip
    =========================================================================== */
+/* The two readouts that sit under a select in the input panel. The panel is
+   on screen whichever tab is showing, so these are refreshed from recalc()
+   rather than from drawSummary(), which only runs for a scenario tab. */
+function panelOut(){
+  const {d,q}=M;
+  const sdOut=document.getElementById("sd-out");
+  if(sdOut) sdOut.textContent=`${exact(d.stampDuty)} · ${(d.stampDuty/q.price*100).toFixed(3)}% of the price`;
+
+  const rOut=document.getElementById("rates-out");
+  if(rOut){
+    let r1=0; for(let i=0;i<Math.min(12,d.N);i++) r1+=d.rates[i];
+    const rvNow=d.rv[Math.min(11,d.N-1)], rLast=ratesCharge(d.rv[d.N-1],q,d.N/12);
+    rOut.textContent=`${exact(r1)}/yr now · ${(r1/rvNow*100).toFixed(2)}% of RV, rising to `
+      +`${(rLast/d.rv[d.N-1]*100).toFixed(2)}% by year ${Math.round(d.N/12)}`;
+  }
+
+}
+
 function drawSummary(){
   const {finalA,finalB,finalDiff,horizon,be,cross,T,d,q,openPay,openRate,stressed}=M;
   const buyWins=finalDiff>=0;
@@ -2203,17 +2348,6 @@ function drawSummary(){
    +chip("Rent over the horizon",exact(T.rent))
    +chip("Interest tax relief",exact(T.hli))
    +(T.withdrawn>0?chip("Drawn back out of portfolio",exact(T.withdrawn),"warn"):"");
-
-  const sdOut=document.getElementById("sd-out");
-  if(sdOut) sdOut.textContent=`${exact(d.stampDuty)} · ${(d.stampDuty/q.price*100).toFixed(3)}% of the price`;
-
-  const rOut=document.getElementById("rates-out");
-  if(rOut){
-    let r1=0; for(let i=0;i<Math.min(12,d.N);i++) r1+=d.rates[i];
-    const rvNow=d.rv[Math.min(11,d.N-1)], rLast=ratesCharge(d.rv[d.N-1],q,d.N/12);
-    rOut.textContent=`${exact(r1)}/yr now · ${(r1/rvNow*100).toFixed(2)}% of RV, rising to `
-      +`${(rLast/d.rv[d.N-1]*100).toFixed(2)}% by year ${Math.round(d.N/12)}`;
-  }
 
   // warnings
   const bans=[];
@@ -2264,13 +2398,17 @@ function syncPairs(k){
   }
 }
 function parseNum(s){const v=parseFloat(String(s).replace(/[,\s_]/g,""));return isFinite(v)?v:NaN;}
+/* Phones get every assumption group closed: the panel is over 2,000px tall
+   with them all open, which buries the results rather than explaining them. */
+const NARROW = matchMedia("(max-width:1060px)").matches;
+
 function buildInputs(){
   const host=document.getElementById("inputs");
   let lastSec=null;
   host.innerHTML=SPEC.map(g=>{
    const sh = g.sec===lastSec ? "" :
      (lastSec=g.sec, `<div class="sec-head">${g.sec}${SEC_NOTE[g.sec]?`<i>${SEC_NOTE[g.sec]}</i>`:""}</div>`);
-   return sh+`<details class="grp"${g.open?" open":""}><summary>${g.g}</summary><div class="rows">`
+   return sh+`<details class="grp"${g.open&&!NARROW?" open":""}><summary>${g.g}</summary><div class="rows">`
    +g.items.map(it=>{
      const id="in-"+it.k;
      if(it.t==="check") return `<div class="row chk" data-k="${it.k}"><label for="${id}">${it.l}</label>
@@ -2333,6 +2471,7 @@ function queue(){ clearTimeout(timer); timer=setTimeout(()=>{ MC=null; recalc();
 function recalc(){
   refresh();
   try{ M=compute(RAW); }catch(err){ console.error(err); return; }
+  panelOut();
   if(cur===-1){ try{ drawSumTab(); }catch(err){ console.error(err); } return; }
   if(cur===-2){ try{ drawHist(); }catch(err){ console.error(err); } return; }
   drawSummary(); drawActive();
