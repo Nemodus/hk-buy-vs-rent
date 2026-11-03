@@ -288,6 +288,8 @@ caption{caption-side:top;text-align:left;padding:0 16px 12px;font-size:12px;colo
 .row.alt label::before{content:"";position:absolute;left:2px;top:-7px;width:5px;height:14px;
   border-left:1px solid var(--axis);border-bottom:1px solid var(--axis)}
 .row.alt input{background:var(--surface-2)}
+.row.off{opacity:.42}
+.row.off input{pointer-events:none}
 td input.sc{width:66px;text-align:right;padding:3px 5px;font-size:12px;border-color:var(--s1);
   box-shadow:inset 2.5px 0 0 var(--s1)}
 td input.nm{width:132px;text-align:left;font-family:var(--ff);font-weight:600;font-size:12.5px;
@@ -703,6 +705,12 @@ const SPEC = [
   {k:"leaseYears",      l:"Rent resets every",       t:"num", v:2, u:"yr", step:1, h:"Rent is fixed for the lease, then steps to the market level."},
   {k:"depositMonths",   l:"Security deposit",        t:"num", v:2, u:"mo", step:1, h:"Held by the landlord, earns nothing, topped up at each reset, returned at the end."},
   {k:"rentAgencyMonths",l:"Agency fee per lease",    t:"num", v:.5, u:"mo", step:.25},
+  {k:"bandYield",       l:"Band the rental yield",   t:"check", v:false,
+     h:"Off, rent and the flat compound at their own rates and the gross yield drifts wherever that takes it — over thirty years a one-point gap moves it by a third. On, the market rent is held to the band below, so you can write a scenario where rent catches up on prices without the yield reaching somewhere Hong Kong has never been. It is the market rent that is bound, so this also moves the rateable value and therefore the owner's rates. Your rent is still fixed for the length of each lease, so the yield can sit outside the band until the next reset."},
+  {k:"yieldFloor",      l:"…floor",              t:"pct", v:1.5, step:.25, alt:true,
+     h:"Gross, before the owner's costs. The RVD series has not had a class below 2.2% since 1999, so 1.5% is already generous room."},
+  {k:"yieldCap",        l:"…cap",                t:"pct", v:5, step:.25, alt:true,
+     h:"Class A peaked near 6% in the early 2000s; the larger classes have not been above 5% this century."},
  ]},
  {sec:"Both sides", g:"Tax, inflation & horizon", open:true, items:[
   {k:"horizonYears", l:"Horizon",                      t:"num", v:30, u:"yr", step:1},
@@ -831,6 +839,11 @@ function resolve(raw){
     govRentOn:!!raw.govRentOn, govRentPct:p("govRentPct"), insAnn:n("insuranceAnnual"),
     maintAnn:n("maintAnnual"), renoEvery:n("renoIntervalYears"), renoCost:n("renoCost"),
     rent0:n("rentStart"), rentG:p("rentGrowth"), lease:n("leaseYears"),
+    bandYield:!!raw.bandYield,
+    /* taken in whichever order they were typed, so an inverted pair bands to
+       the range the user described rather than collapsing onto one edge */
+    yLo:Math.max(0,Math.min(p("yieldFloor"),p("yieldCap"))),
+    yHi:Math.max(p("yieldFloor"),p("yieldCap")),
     depMonths:n("depositMonths"), rentAgency:n("rentAgencyMonths"),
     g:p("propGrowth"),
     eq:p("equityNet"),
@@ -881,7 +894,17 @@ function deterministic(q){
         rentPaid=A(N),agency=A(N),depTopup=A(N),hli=A(N),rv=A(N);
 
   let bal=loan, capped=0;
-  const mkt = m => q.rent0*Math.pow(1+q.rentG,m/12);
+  /* The market rent, optionally held inside a yield band. Both ends are a
+     share of what the flat is worth that month, so banding the yield is the
+     same thing as banding the rent against the deterministic value path. The
+     Risk tab shocks the value but keeps this rent, so under simulation the
+     band holds against the central path, not against each drawn one. */
+  const mkt = m => {
+    const r=q.rent0*Math.pow(1+q.rentG,m/12);
+    if(!q.bandYield) return r;
+    const v=q.price*Math.pow(1+q.g,m/12);
+    return Math.min(Math.max(r, v*q.yLo/12), v*q.yHi/12);
+  };
   /* Insurance, maintenance and the rates bands all move together, or not at all. */
   const infl = m => q.indexCosts ? Math.pow(1+q.cpi,m/12) : 1;
   const leaseM = Math.max(1,Math.round(q.lease*12));
@@ -1312,18 +1335,26 @@ function yieldPts(w,q){
   for(let i=1;i<w.years.length;i++) pts.push({t:w.years[i], v:w.flows[i].rent/w.V[i]*100});
   return pts;
 }
-function yieldChart(hostId, years, pts){
+/* With the band switched on the shading is the constraint the model actually
+   enforced; off, it is the indicative Hong Kong range and nothing more. */
+function yieldChart(hostId, years, pts, band){
   const host=document.getElementById(hostId); if(!host) return;
+  const bLo=band?band[0]:2, bHi=band?band[1]:4;
   const W=Math.max(300,host.clientWidth||600), H=208, pad={t:26,r:68,b:34,l:62};
-  const hi=Math.max(4.2,...pts.map(p=>p.v))*1.12, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
+  const hi=Math.max(bHi*1.05,4.2,...pts.map(p=>p.v))*1.12, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
   const x=scale(0,years[years.length-1],pad.l,pad.l+pw), y=scale(0,hi,pad.t+ph,pad.t);
   const g=tok("--grid"),ax=tok("--axis"),mu=tok("--muted"),s1=tok("--s1"),sf=tok("--surface"),s3=tok("--s3");
 
   let s=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gross rental yield implied by the model, by year">`;
   s+=`<text x="${pad.l}" y="12" font-size="10.5" font-weight="700" fill="${mu}" letter-spacing=".07em">`
    + `GROSS YIELD &#8212; RENT BEFORE THE OWNER&#8217;S COSTS</text>`;
-  s+=`<rect x="${pad.l}" y="${y(4).toFixed(1)}" width="${pw}" height="${(y(2)-y(4)).toFixed(1)}" fill="${s3}" fill-opacity=".09"/>`;
-  s+=`<text x="${pad.l+pw-4}" y="${(y(4)+12).toFixed(1)}" text-anchor="end" font-size="10.5" fill="${mu}">INDICATIVE HONG KONG RANGE</text>`;
+  s+=`<rect x="${pad.l}" y="${y(bHi).toFixed(1)}" width="${pw}" height="${(y(bLo)-y(bHi)).toFixed(1)}" `
+   + `fill="${band?s1:s3}" fill-opacity="${band?".07":".09"}"/>`;
+  if(band) for(const e of [bLo,bHi])
+    s+=`<line x1="${pad.l}" y1="${y(e).toFixed(1)}" x2="${pad.l+pw}" y2="${y(e).toFixed(1)}" `
+     + `stroke="${s1}" stroke-width="1" stroke-dasharray="4 3" opacity=".55"/>`;
+  s+=`<text x="${pad.l+pw-4}" y="${(y(bHi)+12).toFixed(1)}" text-anchor="end" font-size="10.5" fill="${mu}">`
+   + `${band?"YIELD BAND YOU SET":"INDICATIVE HONG KONG RANGE"}</text>`;
   for(const t of ticks(0,hi,4)){const yy=y(t);
     s+=`<line x1="${pad.l}" y1="${yy.toFixed(1)}" x2="${pad.l+pw}" y2="${yy.toFixed(1)}" stroke="${t===0?ax:g}"/>`;
     s+=`<text x="${pad.l-8}" y="${(yy+4).toFixed(1)}" text-anchor="end" font-size="11" fill="${mu}" class="m">${t.toFixed(1)}%</text>`;}
@@ -1342,26 +1373,64 @@ function yieldChart(hostId, years, pts){
 function drawYield(){
   const {years,V,flows}=M.w, q=M.q;
   const pts=yieldPts(M.w,q), L=pts[pts.length-1];
-  yieldChart("ch-yield",years,pts);
+  const band=q.bandYield?[q.yLo*100,q.yHi*100]:null;
+  yieldChart("ch-yield",years,pts,band);
   const lo=Math.min(...pts.map(p=>p.v)), hiY=Math.max(...pts.map(p=>p.v));
   const drift=q.rentG-q.g;
   const f1=flows[1], y1g=f1.rent/V[1]*100,
         y1n=(f1.rent-f1.mgmt-f1.govt-f1.maint-f1.ins)/V[1]*100;
+
+  /* Did the band change anything? Ask the clamp's own question — was the
+     unconstrained market rent outside it — rather than looking at the line,
+     which is the rent you PAY and lags a lease behind. */
+  const bind={lo:0,hi:0,free:[]};
+  if(band) for(let m=1;m<=M.d.N;m++){
+    const yv=q.rent0*Math.pow(1+q.rentG,m/12)*12/(q.price*Math.pow(1+q.g,m/12))*100;
+    bind.free.push(yv);
+    if(yv<band[0]-1e-9) bind.lo++;
+    if(yv>band[1]+1e-9) bind.hi++;
+  }
+  const bit=bind.lo+bind.hi, N=M.d.N;
+  const freeEnd=band?bind.free[bind.free.length-1]:0;
+
+  const bandNote = !band ? "" :
+    (bit===0
+      ? `<b>The band is on</b> but never binds here: at
+         <b class="num">${pct(q.rentG,2)}</b> rent against <b class="num">${pct(q.g,2)}</b> property the
+         yield was always going to stay between <b class="num">${band[0].toFixed(2)}%</b> and
+         <b class="num">${band[1].toFixed(2)}%</b> on its own.`
+      : `<b>The band is on and it bites.</b> Left alone those two growth rates would have taken the yield to
+         <b class="num">${freeEnd.toFixed(2)}%</b> by year ${years[years.length-1]}; the
+         ${bind.hi&&bind.lo ? "band" : bind.hi ? `<b class="num">${band[1].toFixed(2)}%</b> cap`
+                                               : `<b class="num">${band[0].toFixed(2)}%</b> floor`}
+         pins the market rent instead, in
+         <b class="num">${(bit/N*100).toFixed(0)}%</b> of the months. Rent growth of
+         <b class="num">${pct(q.rentG,2)}</b> is therefore not what the renter pays throughout, and because the
+         rateable value is the market rent, the owner&rsquo;s rates move with it too.`);
+
+  const closing = band
+    ? `<span style="color:var(--muted)">The shading is the constraint the model enforced, not a rule of thumb.
+       The line can still sit outside it: your rent is fixed for ${q.lease} year${q.lease===1?"":"s"} at a time
+       while the flat keeps moving, so it drifts between resets and is pulled back at each one.</span>`
+    : `<span style="color:var(--muted)">The shaded band is a rule of thumb, not a rule — mass-market estates
+       have run above it and prime flats below it. If the line leaves it for long, one of the two growth rates is
+       doing something the market has not done for a sustained period, and the yield band under
+       Rent &amp; lease terms will hold it in.</span>`;
+
   document.getElementById("yield-foot").innerHTML=
     `<p style="margin:0;font-size:12.5px;color:var(--ink-2)">Starts at
      <b class="num">${pts[0].v.toFixed(2)}%</b>, ends at <b class="num">${L.v.toFixed(2)}%</b>, and stays between
-     <b class="num">${lo.toFixed(2)}%</b> and <b class="num">${hiY.toFixed(2)}%</b> throughout. The drift comes
-     entirely from rent growing at <b class="num">${pct(q.rentG,2)}</b> against property at
-     <b class="num">${pct(q.g,2)}</b> — ${Math.abs(drift)<1e-9?"identical, so the yield holds flat"
-      :(drift<0?"property compounding faster, so the yield grinds down":"rent compounding faster, so the yield climbs")}.
+     <b class="num">${lo.toFixed(2)}%</b> and <b class="num">${hiY.toFixed(2)}%</b> throughout.
+     ${bit ? "" : `The drift comes entirely from rent growing at <b class="num">${pct(q.rentG,2)}</b> against
+       property at <b class="num">${pct(q.g,2)}</b> — ${Math.abs(drift)<1e-9?"identical, so the yield holds flat"
+        :(drift<0?"property compounding faster, so the yield grinds down":"rent compounding faster, so the yield climbs")}. `}
      The sawtooth is the lease: rent is fixed for ${q.lease} year${q.lease===1?"":"s"} while the flat keeps moving.
+     ${bandNote}
      <b>Gross</b> means before the owner pays anything: take out the management fee, rates, government rent,
      insurance and maintenance and year one&rsquo;s <b class="num">${y1g.toFixed(2)}%</b> becomes
-     <b class="num">${y1n.toFixed(2)}%</b> net &mdash; which is what a landlord actually keeps, and what the
-     indicative band should be read against only after the same deduction.
-     <span style="color:var(--muted)">The shaded band is a rule of thumb, not a rule — mass-market estates have
-     run above it and prime flats below it. If the line leaves it for long, one of the two growth rates is
-     doing something the market has not done for a sustained period.</span></p>`;
+     <b class="num">${y1n.toFixed(2)}%</b> net — which is what a landlord actually keeps, and what any
+     published yield should be read against only after the same deduction.
+     ${closing}</p>`;
 }
 
 /* ---- 8a4. where the money goes ---- */
@@ -1375,40 +1444,48 @@ function drawYield(){
 function spendOf(m){
   const {d,T,q}=m;
   const A=[
-    ["Downpayment",         d.down,                           1],
-    ["Mortgage principal",  T.principal,                      1],
-    ["Mortgage interest",   T.interest,                       0],
-    ["Stamp duty",          d.stampDuty,                      0],
-    ["Buying agency",       d.buyAgency,                      0],
-    ["Fit-out",             q.initialReno,                    0],
-    ["Management fee",      T.mgmt,                           0],
-    ["Rates & govt rent",   T.govt,                           0],
-    ["Maintenance",         T.maint,                          0],
-    ["Refurbishment",       T.reno,                           0],
-    ["Insurance",           T.ins,                            0],
-    ["Cash rebate",        -d.rebate,                         0],
-    ["Interest tax relief",-T.hli,                            0],
+    ["Downpayment",         d.down,       1, "The cash half of the purchase — the price less whatever the bank lends."],
+    ["Mortgage principal",  T.principal,  1, "The loan itself, repaid over the term. It leaves your account like any other payment, but it is buying you the flat."],
+    ["Mortgage interest",   T.interest,   0, "What the borrowing costs, along the modelled rate path. Pure expense."],
+    ["Stamp duty",          d.stampDuty,  0, "Ad valorem duty on the purchase — Scale 2 unless you entered a figure by hand."],
+    ["Buying agency",       d.buyAgency,  0, "The agent's commission on the way in."],
+    ["Fit-out",             q.initialReno,0, "Renovation before you move in. Sunk: it never adds to the flat's value anywhere in this model."],
+    ["Management fee",      T.mgmt,       0, "The estate's monthly charge, compounding at its own growth rate rather than general inflation."],
+    ["Rates & govt rent",   T.govt,       0, "Government rates for occupying the flat, plus government rent where the lease owes it. Both are a share of the rateable value, which is the market rent."],
+    ["Maintenance",         T.maint,      0, "Interior upkeep and your share of any building levy."],
+    ["Refurbishment",       T.reno,       0, "The periodic major refit, inflated to the year it falls due and skipped in the final year."],
+    ["Insurance",           T.ins,        0, "Your own contents and liability policy. The structure is already covered by the management fee."],
+    ["Cash rebate",        -d.rebate,     0, "The bank's rebate on drawdown, paid to you. A credit, so it comes off the total."],
+    ["Interest tax relief",-T.hli,        0, "Salaries tax saved by the home loan interest deduction, capped and time-limited. A credit."],
   ];
+  /* Gross in and gross out, never the net. A renter whose rent outgrows the
+     owner's outgoings has to sell down to keep the two sides deploying the
+     same cash, and on a fast rent path that selling can exceed everything
+     they ever put in — a single net line would then read as a negative
+     contribution and explain nothing about how the portfolio got there. */
   const B=[
-    ["Rent",                T.rent,                           0],
-    ["Into the portfolio",  d.invest0+T.invested-T.withdrawn, 1],
-    ["Deposit",             q.depMonths*q.rent0,              1],
-    ["First agency fee",    q.rentAgency*q.rent0,             0],
-    ["Renewals & top-ups",  T.leaseCost,                      0],
+    ["Rent",                T.rent,              0, "Every month's rent over the horizon, stepping to the market level at each lease reset."],
+    ["Opening lump sum",    d.invest0,           1, "What buying costs on day one that renting does not — downpayment, duty, agency and fit-out, less the deposit and first agency fee. Invested at the start."],
+    ["Surplus invested",    T.invested,          1, "Every month the owner spends more than the renter, the difference is bought into the portfolio. This is the gross amount added, before anything is taken back out."],
+    ["Drawn back out",     -T.withdrawn,         0, "Months where the rent exceeds the owner's outgoings. The renter has to sell down to cover the difference, because both sides must deploy the same cash. A credit against what went in."],
+    ["Deposit",             q.depMonths*q.rent0, 1, "The security deposit, held by the landlord, earning nothing, returned at the end."],
+    ["First agency fee",    q.rentAgency*q.rent0,0, "The agent's fee on the first lease."],
+    ["Renewals & top-ups",  T.leaseCost,         0, "At each lease reset, the agency fee falls due again and the security deposit is topped up to the new rent. Those two, over the horizon."],
   ];
   const sell = q.deductSell ? m.w.V[m.w.V.length-1]*(q.sellAgency+q.sellLegal) : 0;
-  return {A,B,total:T.cash,sell};
+  return {A,B,total:T.cash,sell,
+    put:d.invest0+T.invested, took:T.withdrawn, port:m.w.port[m.w.port.length-1]};
 }
 
 /* Weight several scenarios' breakdowns into one. Every scenario produces the
    same categories in the same order, so this is element-wise. */
 function spendBlend(ms,W){
   const out=ms.map(spendOf);
-  const mix=side=>out[0][side].map(([k,,a],i)=>
-    [k, out.reduce((t,o,j)=>t+W[j]*o[side][i][1], 0), a]);
-  return {A:mix("A"), B:mix("B"),
-    total:out.reduce((t,o,j)=>t+W[j]*o.total,0),
-    sell:out.reduce((t,o,j)=>t+W[j]*o.sell,0)};
+  const mix=side=>out[0][side].map(([k,,a,h],i)=>
+    [k, out.reduce((t,o,j)=>t+W[j]*o[side][i][1], 0), a, h]);
+  const wsum=k=>out.reduce((t,o,j)=>t+W[j]*o[k],0);
+  return {A:mix("A"), B:mix("B"), total:wsum("total"), sell:wsum("sell"),
+    put:wsum("put"), took:wsum("took"), port:wsum("port")};
 }
 
 function drawSpend(hostId,footId,S){
@@ -1420,11 +1497,14 @@ function drawSpend(hostId,footId,S){
     let h=`<div class="spend-col"><div class="spend-h">`
       +`<span class="swatch" style="background:${hue}"></span><b>${name}</b>`
       +`<span class="num">${money(S.total)}</span></div>`;
-    for(const [k,v,asset] of sorted){
+    for(const [k,v,asset,why] of sorted){
       const cr=v<0;
       const w=(Math.abs(v)/span*100).toFixed(1)+"%";
       const fill=cr?tok("--ink-2"):hue, op=cr?".35":(asset?".4":"1");
-      h+=`<div class="spend-r${cr?" cr":""}" title="${esc(k)}: ${exact(v)}" `
+      const tip=[esc(k)+" \u2014 "+exact(v), why?esc(why):"",
+                 asset?"Marked \u00b0: money that becomes something you still own.":""]
+                .filter(Boolean).join("\n\n");
+      h+=`<div class="spend-r${cr?" cr":""}" title="${tip}" `
         +`style="--w:${w};--rf:${fill}${cr?"26":(asset?"2e":"3d")}">`
         +`<span class="k">${k}${asset?" °":""}</span>`
         +`<span class="b"><i style="width:var(--w);background:${fill};opacity:${op}"></i></span>`
@@ -1450,6 +1530,14 @@ function drawSpend(hostId,footId,S){
     getting right${small&&small!==big?`; <b>${small[0].toLowerCase()}</b> is
     <b class="num">${(small[1]/consumed*100).toFixed(1)}%</b>, so an estimate that is out by half moves the
     final answer by almost nothing`:""}.`:""}
+    ${S.took>S.total*.002 ? `The renter does not simply pay in and wait:
+      <b class="num">${money(S.put)}</b> goes into the portfolio over the horizon and
+      <b class="num">${money(S.took)}</b> is sold back out of it along the way, once rent outgrows the
+      owner&rsquo;s outgoings and the renter has to cover the difference. A net
+      <b class="num">${money(S.put-S.took)}</b> contributed, worth
+      <b class="num">${money(S.port)}</b> at the end.` : `Almost nothing comes back out of the portfolio here:
+      <b class="num">${money(S.put)}</b> goes in across the horizon and compounds to
+      <b class="num">${money(S.port)}</b>.`}
     <span style="color:var(--muted)">Selling costs of about <b class="num">${money(S.sell)}</b> sit outside
     this: they come off the sale proceeds at the end rather than out of your monthly budget, and every chart
     already nets them off the buying line.</span></p>`;
@@ -1927,22 +2015,35 @@ function drawSumExtras(){
   const N=years.length;
   diffChart("ch-sdiff", years, years.map((_,j)=>wA[j]-wB[j]));
   assetsChart("ch-sassets","lg-sassets",{years,V:wV,bal,nwB:wB});
-  yieldChart("ch-syield", years, years.map((t,j)=>({t,v:wYield[j]})));
+  const q0=rows[0].m.q, band=q0.bandYield?[q0.yLo*100,q0.yHi*100]:null;
+  yieldChart("ch-syield", years, years.map((t,j)=>({t,v:wYield[j]})), band);
   drawSpend("s-spend","s-spend-foot",spendBlend(rows.map(r=>r.m),SM.W));
 
   const ends=rows.map((r,k)=>({n:r.name,v:yps[k][N-1].v})).sort((a,b)=>a.v-b.v);
-  const stray=rows.filter((r,k)=>yps[k].some(p=>p.v<2||p.v>4)).map(r=>r.name);
+  const bLo=band?band[0]:2, bHi=band?band[1]:4;
+  const stray=rows.filter((r,k)=>yps[k].some(p=>p.v<bLo-1e-6||p.v>bHi+1e-6)).map(r=>r.name);
   document.getElementById("syield-foot").innerHTML=
     `<p style="margin:0;font-size:12.5px;color:var(--ink-2)">Weighted, the gross yield starts at
      <b class="num">${wYield[0].toFixed(2)}%</b> and ends at <b class="num">${wYield[N-1].toFixed(2)}%</b>.
      Across the scenarios the year-${years[N-1]} figure runs from
      <b class="num">${ends[0].v.toFixed(2)}%</b> in <b>${esc(ends[0].n)}</b> to
      <b class="num">${ends[ends.length-1].v.toFixed(2)}%</b> in <b>${esc(ends[ends.length-1].n)}</b>.
-     ${stray.length
-       ? `<b>${stray.length===rows.length?"Every scenario":esc(stray.join(", "))}</b> leave${stray.length===1?"s":""}
-          the indicative band at some point, which is worth a second look at whichever growth rate is driving it.`
-       : `None of them leaves the indicative band, so the rent and price assumptions stay plausible together
-          throughout.`}
+     ${band
+       ? (stray.length
+          ? `The band is on, holding the market rent between <b class="num">${bLo.toFixed(2)}%</b> and
+             <b class="num">${bHi.toFixed(2)}%</b>, and
+             <b>${stray.length===rows.length?"every scenario":esc(stray.join(", "))}</b> still shows outside it:
+             that is the lease, which fixes your rent for ${q0.lease} year${q0.lease===1?"":"s"} while the flat
+             keeps moving, so the yield drifts out and is pulled back at each reset.`
+          : `The band is on, so the market rent is held between <b class="num">${bLo.toFixed(2)}%</b> and
+             <b class="num">${bHi.toFixed(2)}%</b> of what the flat is worth and no scenario can wander
+             outside it.`)
+       : (stray.length
+          ? `<b>${stray.length===rows.length?"Every scenario":esc(stray.join(", "))}</b> leave${stray.length===1?"s":""}
+             the indicative band at some point, which is worth a second look at whichever growth rate is driving
+             it — or switch on the yield band under Rent &amp; lease terms to rule it out by construction.`
+          : `None of them leaves the indicative band, so the rent and price assumptions stay plausible together
+             throughout.`)}
      <span style="color:var(--muted)">Averaging a ratio is not the same as the ratio of the averages; this is
      the expected yield across your scenarios, which is the figure consistent with everything else on this
      tab.</span></p>`;
@@ -2584,6 +2685,7 @@ function buildInputs(){
     else if(el.tagName==="SELECT"){ BASE[k]=el.value; }
     else { const v=parseNum(el.value); el.classList.toggle("bad",isNaN(v)); if(isNaN(v)) return; BASE[k]=v; }
     syncPairs(k);
+    if(k==="bandYield") syncInputs();
     queue();
   });
   host.addEventListener("change",e=>{
@@ -2591,6 +2693,11 @@ function buildInputs(){
   });
 }
 function syncInputs(){
+  for(const k of ["yieldFloor","yieldCap"]){
+    const r=document.querySelector('.row[data-k="'+k+'"]'), el=document.getElementById("in-"+k);
+    if(r) r.classList.toggle("off",!BASE.bandYield);
+    if(el) el.disabled=!BASE.bandYield;
+  }
   for(const it of ITEMS){
     const el=document.getElementById("in-"+it.k); if(!el) continue;
     if(it.t==="check") el.checked=!!BASE[it.k];
