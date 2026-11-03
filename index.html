@@ -706,7 +706,7 @@ const SPEC = [
   {k:"depositMonths",   l:"Security deposit",        t:"num", v:2, u:"mo", step:1, h:"Held by the landlord, earns nothing, topped up at each reset, returned at the end."},
   {k:"rentAgencyMonths",l:"Agency fee per lease",    t:"num", v:.5, u:"mo", step:.25},
   {k:"bandYield",       l:"Band the rental yield",   t:"check", v:false,
-     h:"Off, rent and the flat compound at their own rates and the gross yield drifts wherever that takes it — over thirty years a one-point gap moves it by a third. On, the market rent is held to the band below, so you can write a scenario where rent catches up on prices without the yield reaching somewhere Hong Kong has never been. It is the market rent that is bound, so this also moves the rateable value and therefore the owner's rates. Your rent is still fixed for the length of each lease, so the yield can sit outside the band until the next reset."},
+     h:"Off, rent and the flat compound at their own rates and the gross yield drifts wherever that takes it — over thirty years a one-point gap moves it by a third. On, the market rent is held to the band below, so you can write a scenario where rent catches up on prices without the yield reaching somewhere Hong Kong has never been. It is the market rent that is bound, so this also moves the rateable value and therefore the owner's rates. Your rent is still fixed for the length of each lease, so the yield can sit outside the band until the next reset. The Risk simulation re-strikes it against each drawn path, so the band holds there too."},
   {k:"yieldFloor",      l:"…floor",              t:"pct", v:1.5, step:.25, alt:true,
      h:"Gross, before the owner's costs. The RVD series has not had a class below 2.2% since 1999, so 1.5% is already generous room."},
   {k:"yieldCap",        l:"…cap",                t:"pct", v:5, step:.25, alt:true,
@@ -879,7 +879,20 @@ function deterministic(q){
   const stampDuty = q.sdMode==="manual" ? q.sdManual : avdScale2(q.price);
   const buyAgency=q.price*q.buyAgency, rebate=loan*q.rebate;
   const upfrontBuy = down+stampDuty+buyAgency+q.initialReno-rebate;
-  const upfrontRent = q.depMonths*q.rent0 + q.rentAgency*q.rent0;
+  /* The market rent, optionally held inside a yield band: both ends are a
+     share of what the flat is worth that month, so banding the yield is the
+     same thing as banding the rent against the value path. */
+  const mkt = (m,val) => {
+    const r=q.rent0*Math.pow(1+q.rentG,m/12);
+    if(!q.bandYield) return r;
+    const v=val!==undefined ? val : q.price*Math.pow(1+q.g,m/12);
+    return Math.min(Math.max(r, v*q.yLo/12), v*q.yHi/12);
+  };
+  /* Day one is priced off the same rent the renter actually pays, which is
+     the entered rent unless the band is on and already binding at t=0. */
+  const rent1 = mkt(0);
+  const dep0 = q.depMonths*rent1, agency0 = q.rentAgency*rent1;
+  const upfrontRent = dep0 + agency0;
 
   // Rate path: both HIBOR and prime glide linearly, then hold.
   const legs = m => {
@@ -894,17 +907,6 @@ function deterministic(q){
         rentPaid=A(N),agency=A(N),depTopup=A(N),hli=A(N),rv=A(N);
 
   let bal=loan, capped=0;
-  /* The market rent, optionally held inside a yield band. Both ends are a
-     share of what the flat is worth that month, so banding the yield is the
-     same thing as banding the rent against the deterministic value path. The
-     Risk tab shocks the value but keeps this rent, so under simulation the
-     band holds against the central path, not against each drawn one. */
-  const mkt = m => {
-    const r=q.rent0*Math.pow(1+q.rentG,m/12);
-    if(!q.bandYield) return r;
-    const v=q.price*Math.pow(1+q.g,m/12);
-    return Math.min(Math.max(r, v*q.yLo/12), v*q.yHi/12);
-  };
   /* Insurance, maintenance and the rates bands all move together, or not at all. */
   const infl = m => q.indexCosts ? Math.pow(1+q.cpi,m/12) : 1;
   const leaseM = Math.max(1,Math.round(q.lease*12));
@@ -952,7 +954,7 @@ function deterministic(q){
     if(q.hliOn && y<=q.hliYears && e===y*12) hli[e-1]=Math.min(yi,q.hliCap)*q.taxRate;
   }
 
-  return {N,T,loan,down,stampDuty,buyAgency,rebate,upfrontBuy,upfrontRent,
+  return {N,T,loan,down,stampDuty,buyAgency,rebate,upfrontBuy,upfrontRent,dep0,agency0,leaseM,
     invest0:upfrontBuy-upfrontRent, cappedMonths:capped,
     rate,mortOut,interest,principal,balance,payment,mgmt,rates,govRent,ins,maint,reno,
     rentPaid,agency,depTopup,hli,rv};
@@ -963,31 +965,64 @@ function walk(d,q,shocks){
   const N=d.N, Y=Math.ceil(N/12);
   const sellF = q.deductSell ? 1-q.sellAgency-q.sellLegal : 1;
   const rNet = q.eq/12;
-  const years=[0], nwA=[q.price*sellF-d.loan], nwB=[d.invest0+q.depMonths*q.rent0],
+  const years=[0], nwA=[q.price*sellF-d.loan], nwB=[d.invest0+d.dep0],
         V=[q.price], bal=[d.loan], port=[d.invest0], flows=[null], outAm=new Float64Array(N);
-  let v=q.price, p=d.invest0, dep=q.depMonths*q.rent0, depleted=0, minPort=p;
+  let v=q.price, p=d.invest0, dep=d.dep0, depleted=0, minPort=p;
   const gm=Math.pow(1+q.g,1/12);
   let f=null;
+
+  /* The band is a share of what the flat is worth, so on a shocked path it has
+     to be re-struck against THIS path's value rather than the central one.
+     Without shocks, or with the band off, d's arrays already are that and are
+     used as they come. */
+  const reRent = !!shocks && q.bandYield;
+  const leaseM = d.leaseM;
+  const mktAt = (m,val) => {
+    const r=q.rent0*Math.pow(1+q.rentG,m/12);
+    return Math.min(Math.max(r, val*q.yLo/12), val*q.yHi/12);
+  };
+  let leaseRent=0;
 
   for(let m=1;m<=N;m++){
     const i=m-1;
     if(m%12===1||f===null) f={interest:0,principal:0,mgmt:0,govt:0,maint:0,ins:0,reno:0,hli:0,
                               outA:0,rent:0,leaseCost:0,outB:0,invested:0};
+    const vPrev=v;
     v *= gm * (shocks?shocks.prop[i]:1);
+
+    let rentPaid=d.rentPaid[i], agencyFee=d.agency[i], topUp=d.depTopup[i],
+        ratesM=d.rates[i], govRentM=d.govRent[i];
+    if(reRent){
+      /* A lease is struck on the market rent of the month before it starts,
+         so it is last month's value that prices it. */
+      if((m-1)%leaseM===0){
+        const struck=mktAt(m-1,vPrev);
+        agencyFee = m>1 ? q.rentAgency*struck : 0;
+        topUp     = m>1 ? q.depMonths*(struck-leaseRent) : 0;
+        leaseRent = struck;
+      } else { agencyFee=0; topUp=0; }
+      rentPaid = leaseRent;
+      /* Rates follow the rateable value, which is the market rent of the day,
+         not the rent fixed by your lease. */
+      const rvNow = mktAt(m,v)*12;
+      ratesM   = ratesCharge(rvNow,q,m/12)/12;
+      govRentM = q.govRentOn ? q.govRentPct*rvNow/12 : 0;
+    }
+
     const maint=d.maint[i];
-    const outA = d.mortOut[i]+d.mgmt[i]+d.rates[i]+d.govRent[i]+d.ins[i]+maint+d.reno[i]-d.hli[i];
+    const outA = d.mortOut[i]+d.mgmt[i]+ratesM+govRentM+d.ins[i]+maint+d.reno[i]-d.hli[i];
     outAm[i]=outA;
-    const leaseCost = d.agency[i]+d.depTopup[i];
-    const outB = d.rentPaid[i]+leaseCost;
-    dep += d.depTopup[i];
+    const leaseCost = agencyFee+topUp;
+    const outB = rentPaid+leaseCost;
+    dep += topUp;
     const surplus = outA-outB;
     p = p*(1+rNet)*(shocks?shocks.eq[i]:1) + surplus;
     if(p<minPort) minPort=p;
     if(p<0 && !depleted) depleted=m;
 
     f.interest+=d.interest[i]; f.principal+=d.principal[i]; f.mgmt+=d.mgmt[i];
-    f.govt+=d.rates[i]+d.govRent[i]; f.maint+=maint; f.ins+=d.ins[i]; f.reno+=d.reno[i];
-    f.hli+=d.hli[i]; f.outA+=outA; f.rent+=d.rentPaid[i]; f.leaseCost+=leaseCost;
+    f.govt+=ratesM+govRentM; f.maint+=maint; f.ins+=d.ins[i]; f.reno+=d.reno[i];
+    f.hli+=d.hli[i]; f.outA+=outA; f.rent+=rentPaid; f.leaseCost+=leaseCost;
     f.outB+=outB; f.invested+=surplus;
 
     if(m%12===0||m===N){
@@ -1331,7 +1366,7 @@ function diffChart(hostId, years, diff){
 
 /* ---- 8a3. running gross rental yield, as a plausibility check ---- */
 function yieldPts(w,q){
-  const pts=[{t:0,v:q.rent0*12/q.price*100}];
+  const pts=[{t:0,v:(w.flows[1]?w.flows[1].rent/12:q.rent0)*12/q.price*100}];
   for(let i=1;i<w.years.length;i++) pts.push({t:w.years[i], v:w.flows[i].rent/w.V[i]*100});
   return pts;
 }
@@ -1468,8 +1503,8 @@ function spendOf(m){
     ["Opening lump sum",    d.invest0,           1, "What buying costs on day one that renting does not — downpayment, duty, agency and fit-out, less the deposit and first agency fee. Invested at the start."],
     ["Surplus invested",    T.invested,          1, "Every month the owner spends more than the renter, the difference is bought into the portfolio. This is the gross amount added, before anything is taken back out."],
     ["Drawn back out",     -T.withdrawn,         0, "Months where the rent exceeds the owner's outgoings. The renter has to sell down to cover the difference, because both sides must deploy the same cash. A credit against what went in."],
-    ["Deposit",             q.depMonths*q.rent0, 1, "The security deposit, held by the landlord, earning nothing, returned at the end."],
-    ["First agency fee",    q.rentAgency*q.rent0,0, "The agent's fee on the first lease."],
+    ["Deposit",             d.dep0,              1, "The security deposit, held by the landlord, earning nothing, returned at the end."],
+    ["First agency fee",    d.agency0,           0, "The agent's fee on the first lease."],
     ["Renewals & top-ups",  T.leaseCost,         0, "At each lease reset, the agency fee falls due again and the security deposit is topped up to the new rent. Those two, over the horizon."],
   ];
   const sell = q.deductSell ? m.w.V[m.w.V.length-1]*(q.sellAgency+q.sellLegal) : 0;
@@ -1619,14 +1654,14 @@ function drawCashflow(){
     +li("Total cash out",d.upfrontBuy)
     .replace('class="li"','class="li tot"')+`</div>`
     +`<div><h4><span class="swatch" style="background:var(--s2)"></span>Renting — day one</h4>`
-    +li(`Security deposit (${q.depMonths} mo)`,q.depMonths*q.rent0)
-    +li(`Agency fee (${q.rentAgency} mo)`,q.rentAgency*q.rent0)
+    +li(`Security deposit (${q.depMonths} mo)`,d.dep0)
+    +li(`Agency fee (${q.rentAgency} mo)`,d.agency0)
     +li("Total cash out",d.upfrontRent).replace('class="li"','class="li tot"')+`</div>`
     +`<div><h4><span class="swatch" style="background:var(--s7)"></span>Invested on day one</h4>`
     +li("Buy cash out",d.upfrontBuy)+li("Less rent cash out",-d.upfrontRent,true)
     +li("Into the market",d.invest0).replace('class="li"','class="li tot"')
-    +li("Plus deposit still held",q.depMonths*q.rent0)
-    +li("Net position, day one",d.invest0+q.depMonths*q.rent0).replace('class="li"','class="li tot"')
+    +li("Plus deposit still held",d.dep0)
+    +li("Net position, day one",d.invest0+d.dep0).replace('class="li"','class="li tot"')
     +`<div class="li" style="border:0;color:var(--muted);font-size:11px;padding-top:6px">The deposit earns
       nothing, but it is still the renter's money, so the Position chart counts it alongside the portfolio.
       The portfolio itself compounds at ${pct(q.eq)} net for ${M.horizon} years.</div></div>`;
@@ -1814,10 +1849,16 @@ function drawSensitivity(){
 /* ---- 8d. Monte Carlo fan ---- */
 function drawRisk(){
   const out=document.getElementById("mc-out");
+  const banded = M && M.q && M.q.bandYield;
   if(!MC){ out.innerHTML=`<div class="body" style="color:var(--muted);font-size:12.5px">
     Property growth and portfolio return are resampled every month as correlated lognormal shocks around the
-    averages you entered. Interest rates, rent and costs stay on their central paths, so this isolates asset-price
-    risk. Press <b>Run simulation</b>.</div>`; return; }
+    averages you entered. Interest rates and costs stay on their central paths, so this isolates asset-price
+    risk. ${banded
+      ? `Rent does not: with the yield band on it is re-struck against each drawn path, because the band is a
+         share of what the flat is worth and a path where the flat collapses has to drag the market rent down
+         with it. That feeds the renter's side and, through the rateable value, the owner's rates.`
+      : `Rent stays on its central path too.`}
+    Press <b>Run simulation</b>.</div>`; return; }
   const s1=tok("--s1"),s2=tok("--s2"),g=tok("--grid"),ax=tok("--axis"),mu=tok("--muted");
   const med=MC.aT[Math.round(.5*(MC.aT.length-1))];
   let h=`<div class="mc-stats">
@@ -2593,7 +2634,7 @@ function drawSummary(){
    +chip("Opening rate",pct(openRate))
    +chip("Opening payment",exact(openPay)+"/mo")
    +chip("Rate capped by prime",(d.cappedMonths/d.N*100).toFixed(0)+"% of months")
-   +chip("Gross rental yield",pct(q.rent0*12/q.price))
+   +chip("Gross rental yield",pct(M.d.rentPaid[0]*12/q.price))
    +chip("Payment if rates rise 2%",exact(stressed)+"/mo")
    +chip("Interest over the term",exact(T.interest))
    +chip("Rent over the horizon",exact(T.rent))
