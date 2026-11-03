@@ -175,6 +175,35 @@ button.primary:hover{filter:brightness(1.08)}
   border-top:1px solid var(--border);margin-top:18px}
 .sub-head h4{margin:0;font-size:13.5px;font-weight:600}
 .sub-head p{margin:0;font-size:12px;color:var(--muted);flex:1 1 240px;min-width:0}
+/* ---------- where the money goes ---------- */
+.spend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border);
+  border:1px solid var(--border);border-radius:4px;overflow:hidden;margin:0 16px}
+.spend-col{background:var(--surface);padding:11px 13px 12px;min-width:0}
+.spend-h{display:flex;align-items:baseline;gap:7px;padding-bottom:8px;margin-bottom:7px;
+  border-bottom:1px solid var(--border)}
+.spend-h b{font-size:12.5px;font-weight:600}
+.spend-h .num{margin-left:auto;font-size:13px;font-weight:600}
+.spend-h .swatch{align-self:center}
+.spend-r{display:grid;grid-template-columns:minmax(0,1fr) 34% 72px 44px;gap:0 9px;align-items:center;
+  padding:2.5px 0;font-size:11.5px}
+.spend-r .k{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spend-r .b{height:9px;background:var(--surface-3);border-radius:2px;overflow:hidden}
+.spend-r .b i{display:block;height:100%;border-radius:2px}
+.spend-r .v,.spend-r .p{text-align:right;font-family:var(--fm);font-variant-numeric:tabular-nums}
+.spend-r .p{color:var(--muted)}
+.spend-r.cr .k,.spend-r.cr .v{color:var(--muted)}
+.spend-tot{display:grid;grid-template-columns:minmax(0,1fr) 34% 72px 44px;gap:0 9px;
+  margin-top:7px;padding-top:7px;border-top:1px solid var(--border);font-size:11.5px;font-weight:600}
+.spend-tot .v,.spend-tot .p{text-align:right;font-family:var(--fm);font-variant-numeric:tabular-nums}
+@media (max-width:760px){
+  .spend{grid-template-columns:minmax(0,1fr)}
+  .spend-r,.spend-tot{grid-template-columns:minmax(0,1fr) 74px 44px}
+  .spend-r .b{display:none}
+  .spend-r{padding:3.5px 5px;border-radius:2px;
+    background:linear-gradient(to right,var(--rf) var(--w),transparent var(--w))}
+  .spend-tot{padding-inline:5px}
+  .spend-tot span:nth-child(2){display:none}
+}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:0 16px 10px;font-size:11.5px;color:var(--ink-2)}
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .ch{position:relative;width:100%}
@@ -440,6 +469,16 @@ body.guide-off .guide-band{display:none}
         </div>
         <div class="ch" id="ch-syield"></div>
         <div class="body" id="syield-foot" style="padding-top:6px"></div>
+
+        <div class="sub-head">
+          <h4>Where the money goes</h4>
+          <p>Weighted across your scenarios: every category of cash each side commits over the horizon, largest first, with its share of
+             the total. Both columns come to the same figure — that is the rule the comparison rests on —
+             so this says what each total is made of, and which of your assumptions are big enough to be
+             worth pinning down.</p>
+        </div>
+        <div class="spend" id="s-spend"></div>
+        <div class="body" id="s-spend-foot" style="padding-top:8px"></div>
         </div>
       </div>
     </div>
@@ -526,6 +565,16 @@ body.guide-off .guide-band{display:none}
         </div>
         <div class="ch" id="ch-yield"></div>
         <div class="body" id="yield-foot" style="padding-top:6px"></div>
+
+        <div class="sub-head">
+          <h4>Where the money goes</h4>
+          <p>Every category of cash each side commits over the horizon, largest first, with its share of
+             the total. Both columns come to the same figure — that is the rule the comparison rests on —
+             so this says what each total is made of, and which of your assumptions are big enough to be
+             worth pinning down.</p>
+        </div>
+        <div class="spend" id="spend"></div>
+        <div class="body" id="spend-foot" style="padding-top:8px"></div>
       </section>
 
       <section id="p-cashflow" role="tabpanel" hidden>
@@ -1080,6 +1129,7 @@ const refresh = () => { RAW = rawOf(cur); };
 /* ---- 8a. net position over time + a signed difference strip ---- */
 function drawPosition(){
   const host=document.getElementById("ch-position"); if(!host) return;
+  drawSpend("spend","spend-foot",spendOf(M));
   const W=Math.max(300,host.clientWidth||600), HM=300, pad={t:14,r:16,b:24,l:62};
   const {years,nwA,nwB,diff}=M.w;
   const lo=Math.min(0,...nwA,...nwB), hi=Math.max(...nwA,...nwB);
@@ -1314,6 +1364,98 @@ function drawYield(){
      doing something the market has not done for a sustained period.</span></p>`;
 }
 
+/* ---- 8a4. where the money goes ---- */
+/* Every category of cash either side commits over the horizon. The two sides
+   total exactly the same by construction — the renter invests whatever the
+   owner spends — so the point of setting them side by side is not which is
+   bigger but what each total is made of, and which assumptions are big enough
+   to be worth pinning down. The third field marks money that turns into
+   something you still own: it leaves the current account like everything else
+   here, but it is not consumed. */
+function spendOf(m){
+  const {d,T,q}=m;
+  const A=[
+    ["Downpayment",         d.down,                           1],
+    ["Mortgage principal",  T.principal,                      1],
+    ["Mortgage interest",   T.interest,                       0],
+    ["Stamp duty",          d.stampDuty,                      0],
+    ["Buying agency",       d.buyAgency,                      0],
+    ["Fit-out",             q.initialReno,                    0],
+    ["Management fee",      T.mgmt,                           0],
+    ["Rates & govt rent",   T.govt,                           0],
+    ["Maintenance",         T.maint,                          0],
+    ["Refurbishment",       T.reno,                           0],
+    ["Insurance",           T.ins,                            0],
+    ["Cash rebate",        -d.rebate,                         0],
+    ["Interest tax relief",-T.hli,                            0],
+  ];
+  const B=[
+    ["Rent",                T.rent,                           0],
+    ["Into the portfolio",  d.invest0+T.invested-T.withdrawn, 1],
+    ["Deposit",             q.depMonths*q.rent0,              1],
+    ["First agency fee",    q.rentAgency*q.rent0,             0],
+    ["Renewals & top-ups",  T.leaseCost,                      0],
+  ];
+  const sell = q.deductSell ? m.w.V[m.w.V.length-1]*(q.sellAgency+q.sellLegal) : 0;
+  return {A,B,total:T.cash,sell};
+}
+
+/* Weight several scenarios' breakdowns into one. Every scenario produces the
+   same categories in the same order, so this is element-wise. */
+function spendBlend(ms,W){
+  const out=ms.map(spendOf);
+  const mix=side=>out[0][side].map(([k,,a],i)=>
+    [k, out.reduce((t,o,j)=>t+W[j]*o[side][i][1], 0), a]);
+  return {A:mix("A"), B:mix("B"),
+    total:out.reduce((t,o,j)=>t+W[j]*o.total,0),
+    sell:out.reduce((t,o,j)=>t+W[j]*o.sell,0)};
+}
+
+function drawSpend(hostId,footId,S){
+  const host=document.getElementById(hostId); if(!host) return;
+  /* one scale across both columns, so a bar means the same thing either side */
+  const span=Math.max(...S.A.concat(S.B).map(r=>Math.abs(r[1])),1);
+  const col=(rows,name,hue)=>{
+    const sorted=rows.slice().sort((a,b)=>b[1]-a[1]).filter(r=>Math.abs(r[1])>.5);
+    let h=`<div class="spend-col"><div class="spend-h">`
+      +`<span class="swatch" style="background:${hue}"></span><b>${name}</b>`
+      +`<span class="num">${money(S.total)}</span></div>`;
+    for(const [k,v,asset] of sorted){
+      const cr=v<0;
+      const w=(Math.abs(v)/span*100).toFixed(1)+"%";
+      const fill=cr?tok("--ink-2"):hue, op=cr?".35":(asset?".4":"1");
+      h+=`<div class="spend-r${cr?" cr":""}" title="${esc(k)}: ${exact(v)}" `
+        +`style="--w:${w};--rf:${fill}${cr?"26":(asset?"2e":"3d")}">`
+        +`<span class="k">${k}${asset?" °":""}</span>`
+        +`<span class="b"><i style="width:var(--w);background:${fill};opacity:${op}"></i></span>`
+        +`<span class="v num">${money(v)}</span>`
+        +`<span class="p num">${(v/S.total*100).toFixed(1)}%</span></div>`;
+    }
+    return h+`<div class="spend-tot"><span>Total deployed</span><span></span>`
+      +`<span class="v">${money(S.total)}</span><span class="p">100%</span></div></div>`;
+  };
+  host.innerHTML=col(S.A,"Buying",tok("--s1"))+col(S.B,"Renting and investing",tok("--s2"));
+
+  const foot=document.getElementById(footId); if(!foot) return;
+  const spent=S.A.filter(r=>!r[2]);
+  const consumed=spent.reduce((t,r)=>t+r[1],0);
+  const ranked=spent.filter(r=>r[1]>0).sort((a,b)=>b[1]-a[1]);
+  const big=ranked[0], small=ranked[ranked.length-1];
+  foot.innerHTML=`<p style="margin:0;font-size:12.5px;color:var(--ink-2)">Both columns deploy the same
+    <b class="num">${money(S.total)}</b> — forcing that is what makes the comparison fair, so this is one
+    pot split two ways rather than two rival budgets. On the buying side
+    <b class="num">${money(consumed)}</b> of it is actually consumed; everything marked ° becomes
+    equity in the flat or a deposit you get back.${big?` Of what is consumed,
+    <b>${big[0].toLowerCase()}</b> is <b class="num">${(big[1]/consumed*100).toFixed(0)}%</b> and is worth
+    getting right${small&&small!==big?`; <b>${small[0].toLowerCase()}</b> is
+    <b class="num">${(small[1]/consumed*100).toFixed(1)}%</b>, so an estimate that is out by half moves the
+    final answer by almost nothing`:""}.`:""}
+    <span style="color:var(--muted)">Selling costs of about <b class="num">${money(S.sell)}</b> sit outside
+    this: they come off the sale proceeds at the end rather than out of your monthly budget, and every chart
+    already nets them off the buying line.</span></p>`;
+}
+
+/* ---- 8b. paired annual cash-flow columns ---- */
 /* ---- 8b. paired annual cash-flow columns ---- */
 const CF_SEGS=[["interest","Mortgage interest","--s1"],["principal","Principal repaid","--s2"],
   ["mgmt","Management fee","--s3"],["govt","Rates & government rent","--s4"],
@@ -1786,6 +1928,7 @@ function drawSumExtras(){
   diffChart("ch-sdiff", years, years.map((_,j)=>wA[j]-wB[j]));
   assetsChart("ch-sassets","lg-sassets",{years,V:wV,bal,nwB:wB});
   yieldChart("ch-syield", years, years.map((t,j)=>({t,v:wYield[j]})));
+  drawSpend("s-spend","s-spend-foot",spendBlend(rows.map(r=>r.m),SM.W));
 
   const ends=rows.map((r,k)=>({n:r.name,v:yps[k][N-1].v})).sort((a,b)=>a.v-b.v);
   const stray=rows.filter((r,k)=>yps[k].some(p=>p.v<2||p.v>4)).map(r=>r.name);
