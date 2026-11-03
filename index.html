@@ -326,7 +326,14 @@ body.guide-off .guide-band{display:none}
 @media (max-width:1060px){
   .shell{padding-block:14px 40px;gap:14px}
   .main{order:1;gap:14px}
-  .panel{order:2}
+  /* The panel is a scroll box on the dashboard, where it has a height to
+     scroll within. Here it is just a block in the page, and leaving it a
+     scroll container swallowed every touch that started on it: nothing to
+     scroll inside, and overscroll-behavior:contain stopped the gesture
+     reaching the page. Its head stops sticking for the same reason — with
+     no scroll box of its own it would pin itself to the viewport. */
+  .panel{order:2;overflow:visible;overscroll-behavior:auto}
+  .panel-head{position:static}
   .top-in{flex-wrap:wrap;row-gap:6px}
   .verdict{margin-left:0;text-align:left;flex-basis:100%;order:3}
   .stab{padding:8px 11px 7px}
